@@ -27,3 +27,4 @@ logs/
 # 임시
 *.tmp
 .cache/
+.claude/
