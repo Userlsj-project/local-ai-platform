@@ -1,0 +1,222 @@
+# =============================================================
+# N8N-Ollama 플랫폼 Docker Compose 구성
+# 서비스: N8N, Ollama, Redis, PostgreSQL
+# =============================================================
+
+version: '3.8'
+
+# --- 공통 설정 재사용 앵커 ---
+x-common-env: &common-env
+  TZ: Asia/Seoul
+
+networks:
+  # 모든 서비스가 공유하는 내부 네트워크
+  ollama-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+volumes:
+  # 영구 데이터 저장 볼륨
+  n8n_data:
+    name: n8n_ollama_n8n_data
+  ollama_data:
+    name: n8n_ollama_ollama_data
+  postgres_data:
+    name: n8n_ollama_postgres_data
+  redis_data:
+    name: n8n_ollama_redis_data
+
+services:
+
+  # =========================================================
+  # PostgreSQL - 워크플로우 데이터 및 대화 기록 저장
+  # =========================================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: n8n_postgres
+    restart: unless-stopped
+    networks:
+      - ollama-network
+    ports:
+      - "5432:5432"
+    environment:
+      <<: *common-env
+      POSTGRES_DB: ${POSTGRES_DB:-n8n_ollama}
+      POSTGRES_USER: ${POSTGRES_USER:-n8n_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-n8n_secure_password_2024}
+      # 성능 최적화 설정
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --locale=ko_KR.UTF-8"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # 초기화 SQL 스크립트 마운트
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-n8n_user} -d ${POSTGRES_DB:-n8n_ollama}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    # 리소스 제한
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+
+  # =========================================================
+  # Redis - 세션 및 대화 기록 캐시
+  # =========================================================
+  redis:
+    image: redis:7-alpine
+    container_name: n8n_redis
+    restart: unless-stopped
+    networks:
+      - ollama-network
+    ports:
+      - "6379:6379"
+    environment:
+      <<: *common-env
+    # Redis 설정: 비밀번호 설정, AOF 영속성 활성화
+    command: >
+      redis-server
+      --requirepass ${REDIS_PASSWORD:-redis_secure_password_2024}
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --loglevel notice
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-redis_secure_password_2024}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 128M
+
+  # =========================================================
+  # Ollama - 로컬 LLM 추론 엔진
+  # =========================================================
+  ollama:
+    image: ollama/ollama:latest
+    container_name: n8n_ollama
+    restart: unless-stopped
+    networks:
+      - ollama-network
+    ports:
+      - "11434:11434"
+    environment:
+      <<: *common-env
+      # Ollama 설정
+      OLLAMA_HOST: 0.0.0.0
+      OLLAMA_ORIGINS: "*"
+      OLLAMA_KEEP_ALIVE: "24h"
+      # GPU 메모리 최적화 (CPU 모드)
+      OLLAMA_NUM_PARALLEL: "2"
+      OLLAMA_MAX_LOADED_MODELS: "3"
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:11434/api/tags || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+        reservations:
+          memory: 2G
+
+  # =========================================================
+  # N8N - 워크플로우 자동화 엔진
+  # =========================================================
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: n8n_app
+    restart: unless-stopped
+    networks:
+      - ollama-network
+    ports:
+      - "5678:5678"
+    # PostgreSQL과 Redis가 준비된 후 시작
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    environment:
+      <<: *common-env
+      # N8N 기본 설정
+      N8N_HOST: ${N8N_HOST:-localhost}
+      N8N_PORT: ${N8N_PORT:-5678}
+      N8N_PROTOCOL: ${N8N_PROTOCOL:-http}
+      WEBHOOK_URL: ${WEBHOOK_URL:-http://localhost:5678}
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:-your-super-secret-encryption-key}
+
+      # 데이터베이스 설정 (PostgreSQL 사용)
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_PORT: 5432
+      DB_POSTGRESDB_DATABASE: ${POSTGRES_DB:-n8n_ollama}
+      DB_POSTGRESDB_USER: ${POSTGRES_USER:-n8n_user}
+      DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD:-n8n_secure_password_2024}
+      DB_POSTGRESDB_SCHEMA: ${POSTGRES_SCHEMA:-public}
+
+      # 기본 인증 설정
+      N8N_BASIC_AUTH_ACTIVE: ${N8N_BASIC_AUTH_ACTIVE:-true}
+      N8N_BASIC_AUTH_USER: ${N8N_BASIC_AUTH_USER:-admin}
+      N8N_BASIC_AUTH_PASSWORD: ${N8N_BASIC_AUTH_PASSWORD:-admin123!}
+
+      # 실행 설정
+      EXECUTIONS_PROCESS: main
+      EXECUTIONS_DATA_SAVE_ON_ERROR: all
+      EXECUTIONS_DATA_SAVE_ON_SUCCESS: all
+      EXECUTIONS_DATA_SAVE_ON_PROGRESS: true
+      EXECUTIONS_DATA_MAX_AGE: 336
+
+      # 로깅 설정
+      N8N_LOG_LEVEL: ${N8N_LOG_LEVEL:-info}
+      N8N_LOG_OUTPUT: ${N8N_LOG_OUTPUT:-console}
+
+      # 보안 설정
+      N8N_SECURE_COOKIE: "false"
+      N8N_SKIP_WEBHOOK_DEREGISTRATION_SHUTDOWN: "true"
+      # Code 노드에서 환경 변수 접근 허용 (API 키 인증에 필요)
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
+
+      # 외부 서비스 URL (컨테이너 내부 네트워크)
+      OLLAMA_BASE_URL: http://ollama:11434
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redis_secure_password_2024}@redis:6379
+      API_SECRET_KEY: ${API_SECRET_KEY:-n8n-ollama-api-key-2024}
+      MAX_HISTORY_LENGTH: ${MAX_HISTORY_LENGTH:-20}
+      SESSION_TTL: ${SESSION_TTL:-86400}
+
+    volumes:
+      - n8n_data:/home/node/.n8n
+      # 워크플로우 파일 마운트 (가져오기용)
+      - ./workflows:/home/node/workflows:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:5678/healthz || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
