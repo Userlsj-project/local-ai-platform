@@ -1,0 +1,240 @@
+{
+  "name": "감정 분석 및 맞춤 응답",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "sentiment-response",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "sentiment-webhook",
+      "name": "감정 분석 웹훅",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "webhookId": "sentiment-analysis-main"
+    },
+    {
+      "parameters": {
+        "jsCode": "// =============================================================\n// API 키 인증 및 입력 검증\n// 감정 분석 워크플로우 진입점\n// =============================================================\n\nconst headers = $input.first().json.headers || {};\nconst body    = $input.first().json.body || {};\n\n// API 키 인증\nconst expectedApiKey = $env.API_SECRET_KEY || 'n8n-ollama-api-key-2024';\nconst providedApiKey = headers['x-api-key'] || headers['X-API-Key'] || '';\n\nif (providedApiKey !== expectedApiKey) {\n  throw new Error('AUTH_FAILED: 유효하지 않은 API 키입니다.');\n}\n\nconst userMessage = (body.message || '').trim();\nconst sessionId   = body.session_id || `sentiment_${Date.now()}`;\n\nif (!userMessage) {\n  throw new Error('VALIDATION_ERROR: message 필드는 필수입니다.');\n}\n\nreturn {\n  userMessage,\n  sessionId,\n  requestStartTime: Date.now(),\n  requestId: `sent_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`\n};"
+      },
+      "id": "sentiment-auth",
+      "name": "인증 및 검증",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://ollama:11434/api/chat",
+        "sendBody": true,
+        "contentType": "json",
+        "body": {
+          "model": "llama3.2",
+          "messages": [
+            {
+              "role": "system",
+              "content": "당신은 감정 분석 전문가입니다. 사용자의 메시지를 분석하여 반드시 아래 JSON 형식으로만 응답하세요. 다른 텍스트는 절대 포함하지 마세요.\n\n응답 형식:\n{\"sentiment\": \"positive\" | \"negative\" | \"neutral\", \"confidence\": 0.0~1.0, \"reason\": \"감정 판단 근거 한 문장\", \"emotions\": [\"감정1\", \"감정2\"]}"
+            },
+            {
+              "role": "user",
+              "content": "=다음 메시지의 감정을 분석해주세요: \"{{ $json.userMessage }}\""
+            }
+          ],
+          "stream": false,
+          "options": {
+            "temperature": 0.3,
+            "num_predict": 256
+          }
+        },
+        "options": {
+          "timeout": 60000,
+          "response": { "response": { "responseFormat": "json" } }
+        }
+      },
+      "id": "sentiment-llm",
+      "name": "감정 분석 LLM 요청",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// =============================================================\n// 감정 분석 결과 파싱\n// LLM 응답에서 JSON을 추출하고 감정에 따른 톤 결정\n// =============================================================\n\nconst llmResponse = $input.first().json;\nconst authData    = $('인증 및 검증').first().json;\n\n// LLM 응답에서 감정 분석 JSON 추출\nlet sentimentData = {\n  sentiment:  'neutral',\n  confidence: 0.5,\n  reason:     '분석 결과를 파싱하는 데 실패했습니다.',\n  emotions:   []\n};\n\ntry {\n  const rawContent = llmResponse?.message?.content || llmResponse?.response || '{}';\n  // JSON 블록 추출 (마크다운 코드 블록 제거)\n  const jsonMatch = rawContent.match(/\\{[\\s\\S]*\\}/);\n  if (jsonMatch) {\n    const parsed = JSON.parse(jsonMatch[0]);\n    sentimentData = {\n      sentiment:  parsed.sentiment  || 'neutral',\n      confidence: parseFloat(parsed.confidence) || 0.5,\n      reason:     parsed.reason     || '감정을 분석했습니다.',\n      emotions:   Array.isArray(parsed.emotions) ? parsed.emotions : []\n    };\n  }\n} catch (e) {\n  // 파싱 실패 시 기본값 유지\n}\n\n// 감정이 유효한 값인지 확인\nconst validSentiments = ['positive', 'negative', 'neutral'];\nif (!validSentiments.includes(sentimentData.sentiment)) {\n  sentimentData.sentiment = 'neutral';\n}\n\n// -------------------------------------------------------\n// 감정에 따른 응답 톤 결정\n// -------------------------------------------------------\nconst toneMap = {\n  positive: {\n    name:         '열정적 톤',\n    systemPrompt: '당신은 열정적이고 긍정적인 AI 어시스턴트입니다. 사용자의 긍정적인 에너지에 공감하며, 활기차고 격려하는 방식으로 응답하세요. 이모티콘을 적절히 사용하고, 사용자의 성공과 행복을 응원하는 톤을 유지하세요.'\n  },\n  negative: {\n    name:         '공감적 톤',\n    systemPrompt: '당신은 공감 능력이 뛰어난 AI 어시스턴트입니다. 사용자의 감정을 먼저 인정하고 이해하세요. 판단하지 않고 지지하는 방식으로 응답하며, 필요한 경우 실질적인 도움을 제안하세요. 차분하고 따뜻한 톤을 유지하세요.'\n  },\n  neutral: {\n    name:         '정보 제공 톤',\n    systemPrompt: '당신은 명확하고 유익한 정보를 제공하는 AI 어시스턴트입니다. 객관적이고 구조적인 방식으로 응답하며, 사실에 기반한 정보를 제공하세요. 중립적이고 전문적인 톤을 유지하세요.'\n  }\n};\n\nconst selectedTone = toneMap[sentimentData.sentiment];\n\nreturn {\n  ...authData,\n  sentimentData,\n  selectedTone\n};"
+      },
+      "id": "parse-sentiment",
+      "name": "감정 파싱 및 톤 선택",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://ollama:11434/api/chat",
+        "sendBody": true,
+        "contentType": "json",
+        "body": {
+          "model": "llama3.2",
+          "messages": [
+            {
+              "role": "system",
+              "content": "={{ $json.selectedTone.systemPrompt }}"
+            },
+            {
+              "role": "user",
+              "content": "={{ $json.userMessage }}"
+            }
+          ],
+          "stream": false,
+          "options": {
+            "temperature": 0.8,
+            "top_p": 0.9,
+            "num_predict": 768
+          }
+        },
+        "options": {
+          "timeout": 90000,
+          "response": { "response": { "responseFormat": "json" } }
+        }
+      },
+      "id": "tone-response-llm",
+      "name": "맞춤 톤 응답 생성",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// =============================================================\n// 최종 응답 조합 및 PostgreSQL 저장 데이터 준비\n// =============================================================\n\nconst toneResponse  = $input.first().json;\nconst sentimentData = $('감정 파싱 및 톤 선택').first().json;\n\n// 최종 AI 응답 추출\nconst aiMessage    = toneResponse?.message?.content || toneResponse?.response || '응답 생성 실패';\nconst modelUsed    = toneResponse?.model || 'llama3.2';\nconst responseTime = Date.now() - sentimentData.requestStartTime;\n\nreturn {\n  requestId:    sentimentData.requestId,\n  sessionId:    sentimentData.sessionId,\n  userMessage:  sentimentData.userMessage,\n  aiMessage,\n  modelUsed,\n  responseTime,\n  sentiment:    sentimentData.sentimentData.sentiment,\n  confidence:   sentimentData.sentimentData.confidence,\n  reason:       sentimentData.sentimentData.reason,\n  emotions:     sentimentData.sentimentData.emotions,\n  toneUsed:     sentimentData.selectedTone.name\n};"
+      },
+      "id": "build-final-data",
+      "name": "최종 데이터 조합",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1340, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO sentiment_logs (session_id, user_message, sentiment, confidence, tone_used, ai_response, model_used) VALUES ('{{ $json.sessionId }}', '{{ $json.userMessage.replace(/'/g, \"''\") }}', '{{ $json.sentiment }}', {{ $json.confidence }}, '{{ $json.toneUsed }}', '{{ $json.aiMessage.replace(/'/g, \"''\") }}', '{{ $json.modelUsed }}') RETURNING id;",
+        "options": {}
+      },
+      "id": "postgres-sentiment-log",
+      "name": "감정 분석 로그 저장",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1560, 300],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-creds",
+          "name": "PostgreSQL 연결"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ {\n  success: true,\n  requestId: $('최종 데이터 조합').first().json.requestId,\n  sessionId: $('최종 데이터 조합').first().json.sessionId,\n  data: {\n    message: $('최종 데이터 조합').first().json.aiMessage,\n    timestamp: new Date().toISOString()\n  },\n  sentiment: {\n    result: $('최종 데이터 조합').first().json.sentiment,\n    confidence: $('최종 데이터 조합').first().json.confidence,\n    reason: $('최종 데이터 조합').first().json.reason,\n    emotions: $('최종 데이터 조합').first().json.emotions\n  },\n  metadata: {\n    model: $('최종 데이터 조합').first().json.modelUsed,\n    toneApplied: $('최종 데이터 조합').first().json.toneUsed,\n    responseTime: $('최종 데이터 조합').first().json.responseTime + 'ms'\n  }\n} }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              { "name": "Content-Type",  "value": "application/json" },
+              { "name": "X-Sentiment",   "value": "={{ $('최종 데이터 조합').first().json.sentiment }}" },
+              { "name": "X-Tone-Used",   "value": "={{ $('최종 데이터 조합').first().json.toneUsed }}" }
+            ]
+          }
+        }
+      },
+      "id": "sentiment-success-response",
+      "name": "감정 분석 응답 반환",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1780, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// =============================================================\n// 감정 분석 에러 처리\n// LLM 오류, JSON 파싱 실패 등을 처리\n// =============================================================\n\nconst error        = $input.first().json.error || {};\nconst errorMessage = error.message || '감정 분석 처리 중 오류가 발생했습니다.';\n\nlet statusCode = 500;\nlet errorCode  = 'SENTIMENT_ERROR';\n\nif (errorMessage.startsWith('AUTH_FAILED'))     { statusCode = 401; errorCode = 'UNAUTHORIZED'; }\nelse if (errorMessage.startsWith('VALIDATION')) { statusCode = 400; errorCode = 'BAD_REQUEST'; }\nelse if (errorMessage.includes('timeout'))      { statusCode = 504; errorCode = 'GATEWAY_TIMEOUT'; }\n\nreturn {\n  errorResponse: JSON.stringify({\n    success:   false,\n    error:     errorCode,\n    message:   '감정 분석 요청을 처리하는 중 오류가 발생했습니다.',\n    detail:    errorMessage,\n    timestamp: new Date().toISOString()\n  }),\n  statusCode\n};"
+      },
+      "id": "sentiment-error-handler",
+      "name": "감정 분석 에러 처리",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 520]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.parse($json.errorResponse) }}",
+        "options": {
+          "responseCode": "={{ $json.statusCode }}"
+        }
+      },
+      "id": "sentiment-error-response",
+      "name": "감정 에러 응답",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1120, 520]
+    }
+  ],
+  "connections": {
+    "감정 분석 웹훅": {
+      "main": [
+        [{ "node": "인증 및 검증", "type": "main", "index": 0 }]
+      ]
+    },
+    "인증 및 검증": {
+      "main": [
+        [{ "node": "감정 분석 LLM 요청", "type": "main", "index": 0 }]
+      ]
+    },
+    "감정 분석 LLM 요청": {
+      "main": [
+        [{ "node": "감정 파싱 및 톤 선택", "type": "main", "index": 0 }]
+      ]
+    },
+    "감정 파싱 및 톤 선택": {
+      "main": [
+        [{ "node": "맞춤 톤 응답 생성", "type": "main", "index": 0 }]
+      ]
+    },
+    "맞춤 톤 응답 생성": {
+      "main": [
+        [{ "node": "최종 데이터 조합", "type": "main", "index": 0 }]
+      ]
+    },
+    "최종 데이터 조합": {
+      "main": [
+        [{ "node": "감정 분석 로그 저장", "type": "main", "index": 0 }]
+      ]
+    },
+    "감정 분석 로그 저장": {
+      "main": [
+        [{ "node": "감정 분석 응답 반환", "type": "main", "index": 0 }]
+      ]
+    },
+    "감정 분석 에러 처리": {
+      "main": [
+        [{ "node": "감정 에러 응답", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "executionTimeout": 180
+  },
+  "versionId": "v1.0.0",
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "instanceId": "n8n-ollama-platform"
+  },
+  "id": "workflow-04-sentiment-analysis",
+  "tags": ["AI", "Ollama", "Sentiment", "NLP"]
+}
