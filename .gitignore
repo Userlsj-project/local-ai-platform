@@ -1,0 +1,29 @@
+# 환경 변수 파일 (민감 정보 포함)
+.env
+.env.local
+.env.production
+
+# Docker 볼륨 데이터
+volumes/
+data/
+
+# Node.js
+node_modules/
+npm-debug.log*
+
+# 운영체제
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/settings.json
+.idea/
+*.swp
+
+# 로그
+*.log
+logs/
+
+# 임시
+*.tmp
+.cache/
