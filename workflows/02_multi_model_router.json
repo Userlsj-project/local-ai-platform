@@ -1,0 +1,332 @@
+{
+  "name": "멀티 모델 라우터",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "model-router",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "router-webhook",
+      "name": "라우터 웹훅",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "webhookId": "model-router-main"
+    },
+    {
+      "parameters": {
+        "jsCode": "// =============================================================\n// API 키 인증 및 복잡도 분석\n// 메시지 길이와 키워드를 기반으로 적절한 모델을 선택\n// =============================================================\n\nconst headers = $input.first().json.headers || {};\nconst body    = $input.first().json.body || {};\n\n// API 키 인증\nconst expectedApiKey = $env.API_SECRET_KEY || 'n8n-ollama-api-key-2024';\nconst providedApiKey = headers['x-api-key'] || headers['X-API-Key'] || '';\n\nif (providedApiKey !== expectedApiKey) {\n  throw new Error('AUTH_FAILED: 유효하지 않은 API 키입니다.');\n}\n\nconst message         = (body.message || '').trim();\nconst complexityHint  = (body.complexity_hint || 'auto').toLowerCase();\nconst sessionId       = body.session_id || `router_${Date.now()}`;\n\nif (!message) {\n  throw new Error('VALIDATION_ERROR: message 필드는 필수입니다.');\n}\n\n// -------------------------------------------------------\n// 복잡도 자동 감지 로직\n// complexityHint가 'auto'인 경우에만 자동 분석\n// -------------------------------------------------------\nlet complexity;\nlet selectionReason;\n\nif (complexityHint !== 'auto' && ['simple', 'medium', 'complex'].includes(complexityHint)) {\n  // 사용자 지정 복잡도 사용\n  complexity       = complexityHint;\n  selectionReason  = `사용자 지정 복잡도: ${complexityHint}`;\n} else {\n  // 자동 감지: 메시지 길이 기반 1차 판단\n  const wordCount   = message.split(/\\s+/).length;\n  const charCount   = message.length;\n\n  // 복잡한 질문을 나타내는 키워드 목록\n  const complexKeywords = [\n    '분석', '비교', '설명', '작성', '구현', '설계', '아키텍처',\n    'analyze', 'compare', 'explain', 'implement', 'design', 'architecture',\n    '왜', '어떻게', '차이점', '장단점', 'why', 'how', 'difference',\n    '코드', 'code', '알고리즘', 'algorithm', '최적화', 'optimize'\n  ];\n\n  // 단순 질문 키워드\n  const simpleKeywords = [\n    '안녕', '뭐야', '뭐에요', '뭔가요', 'hi', 'hello', '시간', 'time',\n    '날씨', 'weather', '예', '아니오', 'yes', 'no'\n  ];\n\n  const lowerMessage     = message.toLowerCase();\n  const hasComplexKw     = complexKeywords.some(kw => lowerMessage.includes(kw.toLowerCase()));\n  const hasSimpleKw      = simpleKeywords.some(kw => lowerMessage.includes(kw.toLowerCase()));\n\n  if (hasSimpleKw && !hasComplexKw && wordCount <= 10) {\n    complexity      = 'simple';\n    selectionReason = `단순 키워드 감지, 단어 수: ${wordCount}`;\n  } else if (hasComplexKw || wordCount > 50 || charCount > 300) {\n    complexity      = 'complex';\n    selectionReason = `복잡 키워드 감지 또는 메시지 길이 초과 (단어: ${wordCount}, 글자: ${charCount})`;\n  } else {\n    complexity      = 'medium';\n    selectionReason = `중간 복잡도 (단어: ${wordCount}, 글자: ${charCount})`;\n  }\n}\n\n// 복잡도별 모델 매핑\nconst modelMap = {\n  simple:  'llama3.2:1b',\n  medium:  'llama3.2',\n  complex: 'llama3.2:latest'\n};\n\nconst selectedModel = modelMap[complexity];\n\nreturn {\n  message,\n  sessionId,\n  complexity,\n  selectedModel,\n  selectionReason,\n  requestStartTime: Date.now(),\n  requestId: `router_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`\n};"
+      },
+      "id": "auth-and-analyze",
+      "name": "인증 및 복잡도 분석",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-simple",
+              "leftValue": "={{ $json.complexity }}",
+              "rightValue": "simple",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "route-simple",
+      "name": "단순 모델 라우팅",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [680, 200]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-medium",
+              "leftValue": "={{ $json.complexity }}",
+              "rightValue": "medium",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "route-medium",
+      "name": "중간 모델 라우팅",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [680, 400]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://ollama:11434/api/chat",
+        "sendBody": true,
+        "contentType": "json",
+        "body": {
+          "model": "llama3.2:1b",
+          "messages": [
+            {
+              "role": "system",
+              "content": "당신은 빠르고 간결한 응답을 제공하는 AI 어시스턴트입니다. 핵심만 간단하게 답변하세요."
+            },
+            {
+              "role": "user",
+              "content": "={{ $('인증 및 복잡도 분석').first().json.message }}"
+            }
+          ],
+          "stream": false,
+          "options": {
+            "temperature": 0.5,
+            "num_predict": 256
+          }
+        },
+        "options": {
+          "timeout": 60000,
+          "response": { "response": { "responseFormat": "json" } }
+        }
+      },
+      "id": "llm-simple",
+      "name": "llama3.2:1b 경량 모델",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [920, 100]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://ollama:11434/api/chat",
+        "sendBody": true,
+        "contentType": "json",
+        "body": {
+          "model": "llama3.2",
+          "messages": [
+            {
+              "role": "system",
+              "content": "당신은 균형 잡힌 응답을 제공하는 AI 어시스턴트입니다. 충분한 설명과 함께 명확하게 답변하세요."
+            },
+            {
+              "role": "user",
+              "content": "={{ $('인증 및 복잡도 분석').first().json.message }}"
+            }
+          ],
+          "stream": false,
+          "options": {
+            "temperature": 0.7,
+            "num_predict": 512
+          }
+        },
+        "options": {
+          "timeout": 90000,
+          "response": { "response": { "responseFormat": "json" } }
+        }
+      },
+      "id": "llm-medium",
+      "name": "llama3.2 기본 모델",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [920, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://ollama:11434/api/chat",
+        "sendBody": true,
+        "contentType": "json",
+        "body": {
+          "model": "llama3.2:latest",
+          "messages": [
+            {
+              "role": "system",
+              "content": "당신은 심층적이고 전문적인 분석을 제공하는 AI 어시스턴트입니다. 복잡한 주제를 체계적으로 분석하고, 다양한 관점을 고려하여 포괄적인 답변을 제공하세요. 필요한 경우 예시, 비교, 단계별 설명을 활용하세요."
+            },
+            {
+              "role": "user",
+              "content": "={{ $('인증 및 복잡도 분석').first().json.message }}"
+            }
+          ],
+          "stream": false,
+          "options": {
+            "temperature": 0.8,
+            "top_p": 0.95,
+            "num_predict": 1024
+          }
+        },
+        "options": {
+          "timeout": 120000,
+          "response": { "response": { "responseFormat": "json" } }
+        }
+      },
+      "id": "llm-complex",
+      "name": "llama3.2:latest 고급 모델",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [920, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "// =============================================================\n// 모든 모델 응답을 통합하여 최종 응답 생성\n// 어떤 경로에서 오든 동일한 형식으로 포맷팅\n// =============================================================\n\n// 활성화된 입력 노드에서 응답 가져오기\nconst ollamaResponse = $input.first().json;\nconst analyzeData    = $('인증 및 복잡도 분석').first().json;\n\n// 모델 응답 추출\nconst aiMessage  = ollamaResponse?.message?.content || ollamaResponse?.response || '응답 생성 실패';\nconst modelUsed  = ollamaResponse?.model || analyzeData.selectedModel;\nconst responseTime = Date.now() - analyzeData.requestStartTime;\n\nreturn {\n  requestId:       analyzeData.requestId,\n  sessionId:       analyzeData.sessionId,\n  userMessage:     analyzeData.message,\n  aiMessage,\n  modelUsed,\n  complexity:      analyzeData.complexity,\n  selectionReason: analyzeData.selectionReason,\n  responseTime\n};"
+      },
+      "id": "merge-responses",
+      "name": "응답 통합",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1160, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO router_logs (session_id, user_message, complexity, model_selected, selection_reason, ai_response, response_time) VALUES ('{{ $json.sessionId }}', '{{ $json.userMessage.replace(/'/g, \"''\") }}', '{{ $json.complexity }}', '{{ $json.modelUsed }}', '{{ $json.selectionReason }}', '{{ $json.aiMessage.replace(/'/g, \"''\") }}', {{ $json.responseTime }}) RETURNING id;",
+        "options": {}
+      },
+      "id": "postgres-router-log",
+      "name": "라우터 로그 저장",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1380, 300],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-creds",
+          "name": "PostgreSQL 연결"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { success: true, requestId: $('응답 통합').first().json.requestId, sessionId: $('응답 통합').first().json.sessionId, data: { message: $('응답 통합').first().json.aiMessage, timestamp: new Date().toISOString() }, metadata: { model: $('응답 통합').first().json.modelUsed, complexity: $('응답 통합').first().json.complexity, selectionReason: $('응답 통합').first().json.selectionReason, responseTime: $('응답 통합').first().json.responseTime + 'ms' } } }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              { "name": "Content-Type", "value": "application/json" },
+              { "name": "X-Model-Used", "value": "={{ $('응답 통합').first().json.modelUsed }}" },
+              { "name": "X-Complexity", "value": "={{ $('응답 통합').first().json.complexity }}" }
+            ]
+          }
+        }
+      },
+      "id": "router-success-response",
+      "name": "라우터 응답 반환",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1600, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// =============================================================\n// 라우터 에러 처리\n// 모델 로드 실패, 타임아웃 등 모델별 에러 처리\n// =============================================================\n\nconst error        = $input.first().json.error || {};\nconst errorMessage = error.message || '모델 요청 중 오류가 발생했습니다.';\n\nlet statusCode = 500;\nlet errorCode  = 'MODEL_ERROR';\n\nif (errorMessage.startsWith('AUTH_FAILED'))       { statusCode = 401; errorCode = 'UNAUTHORIZED'; }\nelse if (errorMessage.startsWith('VALIDATION'))   { statusCode = 400; errorCode = 'BAD_REQUEST'; }\nelse if (errorMessage.includes('model not found')) { statusCode = 503; errorCode = 'MODEL_NOT_FOUND'; }\nelse if (errorMessage.includes('timeout'))         { statusCode = 504; errorCode = 'GATEWAY_TIMEOUT'; }\n\nreturn {\n  errorResponse: JSON.stringify({\n    success:   false,\n    error:     errorCode,\n    message:   '요청을 처리하는 중 오류가 발생했습니다. 잠시 후 다시 시도하세요.',\n    detail:    errorMessage,\n    timestamp: new Date().toISOString()\n  }),\n  statusCode\n};"
+      },
+      "id": "router-error-handler",
+      "name": "라우터 에러 처리",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [920, 680]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.parse($json.errorResponse) }}",
+        "options": {
+          "responseCode": "={{ $json.statusCode }}"
+        }
+      },
+      "id": "router-error-response",
+      "name": "라우터 에러 응답",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1160, 680]
+    }
+  ],
+  "connections": {
+    "라우터 웹훅": {
+      "main": [
+        [{ "node": "인증 및 복잡도 분석", "type": "main", "index": 0 }]
+      ]
+    },
+    "인증 및 복잡도 분석": {
+      "main": [
+        [
+          { "node": "단순 모델 라우팅", "type": "main", "index": 0 },
+          { "node": "중간 모델 라우팅", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "단순 모델 라우팅": {
+      "main": [
+        [{ "node": "llama3.2:1b 경량 모델", "type": "main", "index": 0 }],
+        [{ "node": "llama3.2 기본 모델",    "type": "main", "index": 0 }]
+      ]
+    },
+    "중간 모델 라우팅": {
+      "main": [
+        [{ "node": "llama3.2 기본 모델",        "type": "main", "index": 0 }],
+        [{ "node": "llama3.2:latest 고급 모델", "type": "main", "index": 0 }]
+      ]
+    },
+    "llama3.2:1b 경량 모델": {
+      "main": [
+        [{ "node": "응답 통합", "type": "main", "index": 0 }]
+      ]
+    },
+    "llama3.2 기본 모델": {
+      "main": [
+        [{ "node": "응답 통합", "type": "main", "index": 0 }]
+      ]
+    },
+    "llama3.2:latest 고급 모델": {
+      "main": [
+        [{ "node": "응답 통합", "type": "main", "index": 0 }]
+      ]
+    },
+    "응답 통합": {
+      "main": [
+        [{ "node": "라우터 로그 저장", "type": "main", "index": 0 }]
+      ]
+    },
+    "라우터 로그 저장": {
+      "main": [
+        [{ "node": "라우터 응답 반환", "type": "main", "index": 0 }]
+      ]
+    },
+    "라우터 에러 처리": {
+      "main": [
+        [{ "node": "라우터 에러 응답", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "executionTimeout": 180
+  },
+  "versionId": "v1.0.0",
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "instanceId": "n8n-ollama-platform"
+  },
+  "id": "workflow-02-model-router",
+  "tags": ["AI", "Ollama", "Router", "MultiModel"]
+}
