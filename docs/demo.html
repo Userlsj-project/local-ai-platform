@@ -1,0 +1,973 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>N8N-Ollama AI 플랫폼 데모</title>
+  <style>
+    :root {
+      --primary: #6366f1;
+      --primary-dark: #4f46e5;
+      --success: #22c55e;
+      --danger: #ef4444;
+      --warning: #f59e0b;
+      --bg: #0f0f1a;
+      --surface: #1a1a2e;
+      --surface2: #16213e;
+      --border: #2d2d4e;
+      --text: #e2e8f0;
+      --text-muted: #94a3b8;
+      --user-bubble: #4f46e5;
+      --ai-bubble: #1e293b;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── 헤더 ── */
+    header {
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      border-bottom: 1px solid var(--border);
+      padding: 16px 32px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    .logo {
+      width: 40px; height: 40px;
+      background: linear-gradient(135deg, var(--primary), #8b5cf6);
+      border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 20px;
+    }
+    header h1 { font-size: 1.3rem; font-weight: 700; }
+    header p  { font-size: 0.8rem; color: var(--text-muted); margin-top: 2px; }
+    .badge {
+      margin-left: auto;
+      background: rgba(99,102,241,0.2);
+      color: var(--primary);
+      border: 1px solid var(--primary);
+      border-radius: 20px;
+      padding: 4px 12px;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+    .status-dot {
+      width: 8px; height: 8px;
+      background: var(--success);
+      border-radius: 50%;
+      display: inline-block;
+      margin-right: 6px;
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0%,100% { opacity: 1; } 50% { opacity: 0.4; }
+    }
+
+    /* ── 탭 네비게이션 ── */
+    .tabs {
+      display: flex;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+      padding: 0 32px;
+    }
+    .tab {
+      padding: 14px 24px;
+      cursor: pointer;
+      font-size: 0.9rem;
+      color: var(--text-muted);
+      border-bottom: 2px solid transparent;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      user-select: none;
+    }
+    .tab:hover { color: var(--text); }
+    .tab.active {
+      color: var(--primary);
+      border-bottom-color: var(--primary);
+      font-weight: 600;
+    }
+
+    /* ── 메인 레이아웃 ── */
+    .main { flex: 1; display: flex; overflow: hidden; }
+    .panel { display: none; flex: 1; flex-direction: column; }
+    .panel.active { display: flex; }
+
+    /* ── 채팅 패널 ── */
+    .chat-layout {
+      display: grid;
+      grid-template-columns: 1fr 280px;
+      flex: 1;
+      overflow: hidden;
+    }
+    .chat-main { display: flex; flex-direction: column; overflow: hidden; }
+
+    .messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 24px 32px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .messages::-webkit-scrollbar { width: 4px; }
+    .messages::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+    .msg {
+      display: flex;
+      gap: 12px;
+      max-width: 80%;
+      animation: fadeIn 0.3s ease;
+    }
+    @keyframes fadeIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
+
+    .msg.user  { align-self: flex-end; flex-direction: row-reverse; }
+    .msg.ai    { align-self: flex-start; }
+
+    .avatar {
+      width: 36px; height: 36px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 16px; flex-shrink: 0;
+    }
+    .user .avatar { background: var(--user-bubble); }
+    .ai   .avatar { background: linear-gradient(135deg, #6366f1, #8b5cf6); }
+
+    .bubble {
+      padding: 12px 16px;
+      border-radius: 16px;
+      font-size: 0.9rem;
+      line-height: 1.6;
+      white-space: pre-wrap;
+    }
+    .user .bubble {
+      background: var(--user-bubble);
+      border-bottom-right-radius: 4px;
+    }
+    .ai .bubble {
+      background: var(--ai-bubble);
+      border: 1px solid var(--border);
+      border-bottom-left-radius: 4px;
+    }
+
+    .msg-meta {
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      margin-top: 4px;
+      padding: 0 4px;
+    }
+    .user .msg-meta { text-align: right; }
+
+    .typing {
+      display: flex; gap: 4px; align-items: center;
+      padding: 12px 16px;
+    }
+    .dot {
+      width: 8px; height: 8px;
+      background: var(--text-muted);
+      border-radius: 50%;
+      animation: bounce 1.4s infinite ease-in-out;
+    }
+    .dot:nth-child(2) { animation-delay: 0.2s; }
+    .dot:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes bounce {
+      0%,60%,100% { transform: translateY(0); }
+      30%          { transform: translateY(-8px); }
+    }
+
+    .input-bar {
+      padding: 16px 32px;
+      border-top: 1px solid var(--border);
+      background: var(--surface);
+      display: flex;
+      gap: 12px;
+      align-items: flex-end;
+    }
+    .input-bar textarea {
+      flex: 1;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      color: var(--text);
+      padding: 12px 16px;
+      font-size: 0.9rem;
+      font-family: inherit;
+      resize: none;
+      outline: none;
+      max-height: 120px;
+      min-height: 44px;
+      transition: border-color 0.2s;
+    }
+    .input-bar textarea:focus { border-color: var(--primary); }
+    .input-bar textarea::placeholder { color: var(--text-muted); }
+
+    .send-btn {
+      background: var(--primary);
+      color: white;
+      border: none;
+      border-radius: 12px;
+      padding: 12px 20px;
+      cursor: pointer;
+      font-size: 1rem;
+      transition: background 0.2s, transform 0.1s;
+      flex-shrink: 0;
+    }
+    .send-btn:hover:not(:disabled) { background: var(--primary-dark); }
+    .send-btn:active:not(:disabled) { transform: scale(0.97); }
+    .send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* ── 사이드 패널 ── */
+    .sidebar {
+      border-left: 1px solid var(--border);
+      background: var(--surface);
+      padding: 20px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .sidebar h3 { font-size: 0.85rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+
+    .setting-group { display: flex; flex-direction: column; gap: 8px; }
+    .setting-group label { font-size: 0.8rem; color: var(--text-muted); }
+    .setting-group input, .setting-group select {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      padding: 8px 12px;
+      font-size: 0.85rem;
+      width: 100%;
+      outline: none;
+    }
+    .setting-group select option { background: var(--surface2); }
+
+    .stat-card {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px;
+    }
+    .stat-card .label { font-size: 0.75rem; color: var(--text-muted); }
+    .stat-card .value { font-size: 1.4rem; font-weight: 700; color: var(--primary); margin-top: 4px; }
+
+    .clear-btn {
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text-muted);
+      padding: 8px;
+      cursor: pointer;
+      font-size: 0.8rem;
+      transition: all 0.2s;
+      width: 100%;
+    }
+    .clear-btn:hover { border-color: var(--danger); color: var(--danger); }
+
+    /* ── 라우터 패널 ── */
+    .router-layout {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0;
+      overflow: hidden;
+    }
+    .router-form-pane {
+      padding: 32px;
+      overflow-y: auto;
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+    .router-result-pane {
+      padding: 32px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .form-field { display: flex; flex-direction: column; gap: 8px; }
+    .form-field label { font-size: 0.85rem; font-weight: 600; color: var(--text-muted); }
+    .form-field textarea, .form-field select {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      color: var(--text);
+      padding: 12px;
+      font-size: 0.9rem;
+      font-family: inherit;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    .form-field textarea:focus, .form-field select:focus { border-color: var(--primary); }
+    .form-field textarea { resize: vertical; min-height: 100px; }
+
+    .complexity-chips {
+      display: flex; gap: 8px; flex-wrap: wrap;
+    }
+    .chip {
+      padding: 6px 16px;
+      border-radius: 20px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 0.82rem;
+      transition: all 0.2s;
+    }
+    .chip:hover { border-color: var(--primary); color: var(--primary); }
+    .chip.selected { background: var(--primary); border-color: var(--primary); color: white; }
+
+    .run-btn {
+      background: linear-gradient(135deg, var(--primary), #8b5cf6);
+      color: white;
+      border: none;
+      border-radius: 10px;
+      padding: 14px;
+      cursor: pointer;
+      font-size: 0.95rem;
+      font-weight: 600;
+      transition: opacity 0.2s, transform 0.1s;
+    }
+    .run-btn:hover:not(:disabled) { opacity: 0.9; }
+    .run-btn:active:not(:disabled) { transform: scale(0.98); }
+    .run-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .result-box {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+      min-height: 120px;
+    }
+    .result-box .placeholder { color: var(--text-muted); font-size: 0.9rem; text-align: center; padding: 24px; }
+
+    .model-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      margin-bottom: 12px;
+    }
+    .model-badge.simple  { background: rgba(34,197,94,0.15);  color: var(--success); border: 1px solid rgba(34,197,94,0.3); }
+    .model-badge.medium  { background: rgba(245,158,11,0.15); color: var(--warning); border: 1px solid rgba(245,158,11,0.3); }
+    .model-badge.complex { background: rgba(99,102,241,0.15); color: var(--primary); border: 1px solid rgba(99,102,241,0.3); }
+
+    .meta-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .meta-item {
+      background: var(--surface);
+      border-radius: 8px;
+      padding: 8px 12px;
+    }
+    .meta-item .k { font-size: 0.72rem; color: var(--text-muted); }
+    .meta-item .v { font-size: 0.85rem; font-weight: 600; margin-top: 2px; }
+
+    /* ── 감정 분석 패널 ── */
+    .sentiment-layout {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 40px 32px;
+      overflow-y: auto;
+      gap: 24px;
+    }
+    .sentiment-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 28px;
+      width: 100%;
+      max-width: 700px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .sentiment-card h2 { font-size: 1rem; color: var(--text-muted); font-weight: 600; }
+
+    .sentiment-meter {
+      display: flex;
+      gap: 16px;
+      align-items: center;
+    }
+    .sentiment-emoji { font-size: 3.5rem; flex-shrink: 0; }
+    .sentiment-info { flex: 1; }
+    .sentiment-label {
+      font-size: 1.5rem;
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+    .sentiment-label.positive { color: var(--success); }
+    .sentiment-label.negative { color: var(--danger); }
+    .sentiment-label.neutral  { color: var(--warning); }
+
+    .confidence-bar {
+      height: 8px;
+      background: var(--border);
+      border-radius: 4px;
+      overflow: hidden;
+      margin-top: 8px;
+    }
+    .confidence-fill {
+      height: 100%;
+      border-radius: 4px;
+      transition: width 0.8s ease;
+    }
+    .confidence-fill.positive { background: var(--success); }
+    .confidence-fill.negative { background: var(--danger); }
+    .confidence-fill.neutral  { background: var(--warning); }
+
+    .emotion-tags { display: flex; gap: 8px; flex-wrap: wrap; }
+    .emotion-tag {
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-size: 0.8rem;
+      background: rgba(99,102,241,0.15);
+      color: var(--primary);
+      border: 1px solid rgba(99,102,241,0.3);
+    }
+
+    .response-area {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+      font-size: 0.9rem;
+      line-height: 1.7;
+      white-space: pre-wrap;
+      min-height: 80px;
+    }
+
+    /* ── 로더 ── */
+    .loader {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 20px;
+      color: var(--text-muted);
+      font-size: 0.85rem;
+    }
+    .spinner {
+      width: 18px; height: 18px;
+      border: 2px solid var(--border);
+      border-top-color: var(--primary);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── 토스트 ── */
+    .toast {
+      position: fixed;
+      bottom: 24px; right: 24px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 20px;
+      font-size: 0.85rem;
+      opacity: 0;
+      transform: translateY(10px);
+      transition: all 0.3s;
+      z-index: 100;
+    }
+    .toast.show { opacity: 1; transform: translateY(0); }
+    .toast.error { border-color: var(--danger); color: var(--danger); }
+
+    /* ── 초기 안내 ── */
+    .welcome {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      flex: 1;
+      gap: 12px;
+      color: var(--text-muted);
+    }
+    .welcome .icon { font-size: 3rem; }
+    .welcome p { font-size: 0.9rem; }
+
+    /* 반응형 */
+    @media (max-width: 900px) {
+      .chat-layout    { grid-template-columns: 1fr; }
+      .sidebar        { display: none; }
+      .router-layout  { grid-template-columns: 1fr; }
+      .router-result-pane { border-top: 1px solid var(--border); }
+    }
+  </style>
+</head>
+<body>
+
+<!-- 헤더 -->
+<header>
+  <div class="logo">🤖</div>
+  <div>
+    <h1>N8N-Ollama AI 플랫폼</h1>
+    <p>Docker 기반 로컬 LLM 자동화 플랫폼</p>
+  </div>
+  <span class="badge"><span class="status-dot"></span>Live Demo</span>
+</header>
+
+<!-- 탭 -->
+<div class="tabs">
+  <div class="tab active" onclick="switchTab('chat')" id="tab-chat">
+    💬 메인 AI 어시스턴트
+  </div>
+  <div class="tab" onclick="switchTab('router')" id="tab-router">
+    🔀 멀티 모델 라우터
+  </div>
+  <div class="tab" onclick="switchTab('sentiment')" id="tab-sentiment">
+    💡 감정 분석
+  </div>
+</div>
+
+<!-- 메인 -->
+<div class="main">
+
+  <!-- ════════════════ 워크플로우 1: 채팅 ════════════════ -->
+  <div class="panel active" id="panel-chat">
+    <div class="chat-layout">
+      <div class="chat-main">
+        <div class="messages" id="messages">
+          <div class="welcome" id="welcome-msg">
+            <div class="icon">💬</div>
+            <p>메시지를 입력하면 AI가 응답합니다.</p>
+            <p style="font-size:0.8rem">Redis로 대화 기록을 유지합니다.</p>
+          </div>
+        </div>
+        <div class="input-bar">
+          <textarea id="chat-input" placeholder="메시지를 입력하세요... (Shift+Enter로 줄바꿈, Enter로 전송)"
+            rows="1" onkeydown="handleChatKey(event)" oninput="autoResize(this)"></textarea>
+          <button class="send-btn" id="send-btn" onclick="sendChat()">➤</button>
+        </div>
+      </div>
+      <div class="sidebar">
+        <h3>설정</h3>
+        <div class="setting-group">
+          <label>세션 ID</label>
+          <input type="text" id="session-id" value="demo_session_01" />
+        </div>
+        <hr style="border-color:var(--border)" />
+        <h3>통계</h3>
+        <div class="stat-card">
+          <div class="label">총 메시지 수</div>
+          <div class="value" id="msg-count">0</div>
+        </div>
+        <div class="stat-card">
+          <div class="label">마지막 응답 시간</div>
+          <div class="value" id="last-rt">-</div>
+        </div>
+        <div class="stat-card">
+          <div class="label">사용 모델</div>
+          <div class="value" style="font-size:0.85rem" id="last-model">-</div>
+        </div>
+        <hr style="border-color:var(--border)" />
+        <button class="clear-btn" onclick="clearChat()">🗑 대화 초기화</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════════════ 워크플로우 2: 라우터 ════════════════ -->
+  <div class="panel" id="panel-router">
+    <div class="router-layout">
+      <div class="router-form-pane">
+        <div>
+          <h2 style="font-size:1.1rem;margin-bottom:6px">멀티 모델 라우터</h2>
+          <p style="font-size:0.85rem;color:var(--text-muted)">메시지 복잡도에 따라 최적 모델을 자동 선택합니다.</p>
+        </div>
+
+        <div class="form-field">
+          <label>메시지</label>
+          <textarea id="router-input" placeholder="질문을 입력하세요..."></textarea>
+        </div>
+
+        <div class="form-field">
+          <label>복잡도 힌트</label>
+          <div class="complexity-chips">
+            <div class="chip" onclick="selectChip(this,'auto')">🔍 자동 감지</div>
+            <div class="chip selected" onclick="selectChip(this,'simple')">⚡ Simple</div>
+            <div class="chip" onclick="selectChip(this,'medium')">⚖️ Medium</div>
+            <div class="chip" onclick="selectChip(this,'complex')">🧠 Complex</div>
+          </div>
+          <input type="hidden" id="complexity-val" value="simple" />
+        </div>
+
+        <!-- 예시 메시지 버튼 -->
+        <div class="form-field">
+          <label>예시 메시지</label>
+          <div style="display:flex;flex-direction:column;gap:6px">
+            <button class="chip" style="text-align:left;border-radius:8px" onclick="setExample('안녕!', 'simple')">⚡ "안녕!" → Simple 모델</button>
+            <button class="chip" style="text-align:left;border-radius:8px" onclick="setExample('파이썬 리스트와 튜플의 차이점은?', 'medium')">⚖️ 차이점 질문 → Medium 모델</button>
+            <button class="chip" style="text-align:left;border-radius:8px" onclick="setExample('마이크로서비스 아키텍처의 장단점을 모놀리식과 비교하여 분석해주세요.', 'complex')">🧠 아키텍처 분석 → Complex 모델</button>
+          </div>
+        </div>
+
+        <button class="run-btn" id="router-btn" onclick="runRouter()">실행 →</button>
+      </div>
+
+      <div class="router-result-pane">
+        <h3 style="font-size:0.85rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em">결과</h3>
+        <div id="router-result">
+          <div class="result-box">
+            <div class="placeholder">결과가 여기에 표시됩니다.</div>
+          </div>
+        </div>
+
+        <!-- 모델 선택 시각화 -->
+        <div id="model-visual" style="display:none">
+          <h3 style="font-size:0.85rem;color:var(--text-muted);margin-bottom:12px">모델 선택 결과</h3>
+          <div style="display:flex;gap:12px">
+            <div class="stat-card" id="mv-simple" style="flex:1;text-align:center;transition:all 0.3s">
+              <div style="font-size:1.5rem">⚡</div>
+              <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px">llama3.2:1b</div>
+              <div style="font-size:0.7rem;color:var(--text-muted)">Simple</div>
+            </div>
+            <div class="stat-card" id="mv-medium" style="flex:1;text-align:center;transition:all 0.3s">
+              <div style="font-size:1.5rem">⚖️</div>
+              <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px">llama3.2</div>
+              <div style="font-size:0.7rem;color:var(--text-muted)">Medium</div>
+            </div>
+            <div class="stat-card" id="mv-complex" style="flex:1;text-align:center;transition:all 0.3s">
+              <div style="font-size:1.5rem">🧠</div>
+              <div style="font-size:0.75rem;color:var(--text-muted);margin-top:4px">llama3.2:latest</div>
+              <div style="font-size:0.7rem;color:var(--text-muted)">Complex</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════════════ 워크플로우 4: 감정 분석 ════════════════ -->
+  <div class="panel" id="panel-sentiment">
+    <div class="sentiment-layout">
+      <div class="sentiment-card">
+        <h2>메시지 입력</h2>
+        <div style="display:flex;gap:12px">
+          <textarea id="sent-input" style="flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:10px;color:var(--text);padding:12px;font-family:inherit;font-size:0.9rem;resize:none;outline:none;min-height:80px" placeholder="감정 분석할 메시지를 입력하세요..."></textarea>
+        </div>
+        <!-- 예시 -->
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <span style="font-size:0.8rem;color:var(--text-muted);align-self:center">예시:</span>
+          <button class="chip" onclick="setSentExample('오늘 발표에서 A+를 받았어요! 정말 기뻐요! 😊')">😊 긍정</button>
+          <button class="chip" onclick="setSentExample('요즘 너무 힘들고 지쳐있어요. 아무것도 하기 싫어요.')">😢 부정</button>
+          <button class="chip" onclick="setSentExample('오늘 회의가 3시에 있습니다. 준비해주세요.')">😐 중립</button>
+        </div>
+        <button class="run-btn" id="sent-btn" onclick="runSentiment()">감정 분석 실행 →</button>
+      </div>
+
+      <!-- 결과 -->
+      <div class="sentiment-card" id="sent-result-card" style="display:none">
+        <h2>감정 분석 결과</h2>
+        <div class="sentiment-meter">
+          <div class="sentiment-emoji" id="sent-emoji">😐</div>
+          <div class="sentiment-info">
+            <div class="sentiment-label" id="sent-label">중립</div>
+            <div style="font-size:0.82rem;color:var(--text-muted)" id="sent-reason"></div>
+            <div class="confidence-bar">
+              <div class="confidence-fill" id="sent-bar" style="width:0%"></div>
+            </div>
+            <div style="font-size:0.78rem;color:var(--text-muted);margin-top:4px" id="sent-conf"></div>
+          </div>
+        </div>
+        <div>
+          <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:8px">감지된 감정</div>
+          <div class="emotion-tags" id="sent-emotions"></div>
+        </div>
+        <div>
+          <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:8px" id="sent-tone-label"></div>
+          <div class="response-area" id="sent-response"></div>
+        </div>
+        <div class="meta-grid">
+          <div class="meta-item"><div class="k">모델</div><div class="v" id="sent-model">-</div></div>
+          <div class="meta-item"><div class="k">응답 시간</div><div class="v" id="sent-rt">-</div></div>
+        </div>
+      </div>
+
+      <div id="sent-loading" style="display:none">
+        <div class="loader"><div class="spinner"></div>감정 분석 중...</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- 토스트 -->
+<div class="toast" id="toast"></div>
+
+<script>
+const API_KEY  = 'n8n-ollama-api-key-2024';
+const BASE_URL = 'http://localhost:5678/webhook';
+let msgCount   = 0;
+let selectedComplexity = 'simple';
+let isSending  = false;
+
+// ── 탭 전환
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  document.getElementById('panel-' + name).classList.add('active');
+}
+
+// ── 토스트 알림
+function showToast(msg, isError = false) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast show' + (isError ? ' error' : '');
+  setTimeout(() => { t.className = 'toast'; }, 3000);
+}
+
+// ── 공통 API 호출
+async function callApi(endpoint, payload) {
+  const res = await fetch(`${BASE_URL}/${endpoint}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-API-Key': API_KEY },
+    body: JSON.stringify(payload)
+  });
+  const data = await res.json();
+  if (!data.success) throw new Error(data.message || '요청 실패');
+  return data;
+}
+
+// ══════════════════════════════════════════
+// 워크플로우 1: 채팅
+// ══════════════════════════════════════════
+function handleChatKey(e) {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); }
+}
+function autoResize(el) {
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+}
+
+function addMessage(role, text, meta = '') {
+  const welcome = document.getElementById('welcome-msg');
+  if (welcome) welcome.remove();
+
+  const msgs = document.getElementById('messages');
+  const div = document.createElement('div');
+  div.className = 'msg ' + role;
+  div.innerHTML = `
+    <div class="avatar">${role === 'user' ? '👤' : '🤖'}</div>
+    <div>
+      <div class="bubble">${escHtml(text)}</div>
+      ${meta ? `<div class="msg-meta">${meta}</div>` : ''}
+    </div>`;
+  msgs.appendChild(div);
+  msgs.scrollTop = msgs.scrollHeight;
+  return div;
+}
+
+function addTyping() {
+  const msgs = document.getElementById('messages');
+  const div = document.createElement('div');
+  div.className = 'msg ai';
+  div.id = 'typing-indicator';
+  div.innerHTML = `<div class="avatar">🤖</div><div class="bubble typing"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>`;
+  msgs.appendChild(div);
+  msgs.scrollTop = msgs.scrollHeight;
+}
+
+function removeTyping() {
+  const t = document.getElementById('typing-indicator');
+  if (t) t.remove();
+}
+
+async function sendChat() {
+  if (isSending) return;
+  const input   = document.getElementById('chat-input');
+  const message = input.value.trim();
+  if (!message) return;
+
+  const sessionId = document.getElementById('session-id').value || 'demo_session';
+
+  isSending = true;
+  input.value = '';
+  input.style.height = 'auto';
+  document.getElementById('send-btn').disabled = true;
+
+  addMessage('user', message);
+  addTyping();
+  msgCount++;
+
+  try {
+    const data = await callApi('ai-assistant', { message, session_id: sessionId });
+    removeTyping();
+    const rt = data.metadata?.responseTime || '';
+    const model = data.metadata?.model || '';
+    addMessage('ai', data.data.message, `${model} · ${rt}`);
+
+    document.getElementById('msg-count').textContent = ++msgCount;
+    document.getElementById('last-rt').textContent = rt;
+    document.getElementById('last-model').textContent = model;
+  } catch (err) {
+    removeTyping();
+    addMessage('ai', '오류: ' + err.message);
+    showToast(err.message, true);
+  } finally {
+    isSending = false;
+    document.getElementById('send-btn').disabled = false;
+    input.focus();
+  }
+}
+
+function clearChat() {
+  const msgs = document.getElementById('messages');
+  msgs.innerHTML = `<div class="welcome" id="welcome-msg"><div class="icon">💬</div><p>메시지를 입력하면 AI가 응답합니다.</p></div>`;
+  msgCount = 0;
+  document.getElementById('msg-count').textContent = '0';
+  document.getElementById('last-rt').textContent = '-';
+  document.getElementById('last-model').textContent = '-';
+  // 새 세션 ID 생성
+  document.getElementById('session-id').value = 'demo_session_' + Date.now();
+}
+
+// ══════════════════════════════════════════
+// 워크플로우 2: 라우터
+// ══════════════════════════════════════════
+function selectChip(el, val) {
+  document.querySelectorAll('.complexity-chips .chip').forEach(c => c.classList.remove('selected'));
+  el.classList.add('selected');
+  selectedComplexity = val;
+  document.getElementById('complexity-val').value = val;
+}
+
+function setExample(text, complexity) {
+  document.getElementById('router-input').value = text;
+  const chips = document.querySelectorAll('.complexity-chips .chip');
+  const map   = { auto: 0, simple: 1, medium: 2, complex: 3 };
+  chips.forEach(c => c.classList.remove('selected'));
+  chips[map[complexity]].classList.add('selected');
+  selectedComplexity = complexity;
+}
+
+async function runRouter() {
+  const message = document.getElementById('router-input').value.trim();
+  if (!message) { showToast('메시지를 입력하세요', true); return; }
+
+  const btn = document.getElementById('router-btn');
+  btn.disabled = true;
+  btn.textContent = '처리 중...';
+  document.getElementById('router-result').innerHTML = '<div class="loader"><div class="spinner"></div>모델 선택 및 응답 생성 중...</div>';
+  document.getElementById('model-visual').style.display = 'none';
+
+  try {
+    const data = await callApi('model-router', { message, complexity_hint: selectedComplexity });
+    const m    = data.metadata;
+    const complexity = m.complexity;
+
+    document.getElementById('router-result').innerHTML = `
+      <div class="result-box">
+        <div class="model-badge ${complexity}">
+          ${{ simple:'⚡', medium:'⚖️', complex:'🧠' }[complexity]}
+          ${m.model} · ${complexity.toUpperCase()} · ${m.responseTime}
+        </div>
+        <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:12px">
+          선택 이유: ${m.selectionReason}
+        </div>
+        <div style="font-size:0.9rem;line-height:1.7">${escHtml(data.data.message)}</div>
+      </div>`;
+
+    // 모델 시각화
+    document.getElementById('model-visual').style.display = 'block';
+    ['simple','medium','complex'].forEach(c => {
+      const el = document.getElementById('mv-' + c);
+      el.style.border = '1px solid var(--border)';
+      el.style.opacity = '0.5';
+    });
+    const sel = document.getElementById('mv-' + complexity);
+    sel.style.border = '2px solid var(--primary)';
+    sel.style.opacity = '1';
+    sel.style.background = 'rgba(99,102,241,0.1)';
+
+  } catch (err) {
+    document.getElementById('router-result').innerHTML = `<div class="result-box"><div style="color:var(--danger)">${err.message}</div></div>`;
+    showToast(err.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '실행 →';
+  }
+}
+
+// ══════════════════════════════════════════
+// 워크플로우 4: 감정 분석
+// ══════════════════════════════════════════
+function setSentExample(text) {
+  document.getElementById('sent-input').value = text;
+}
+
+async function runSentiment() {
+  const message = document.getElementById('sent-input').value.trim();
+  if (!message) { showToast('메시지를 입력하세요', true); return; }
+
+  const btn = document.getElementById('sent-btn');
+  btn.disabled = true;
+  btn.textContent = '분석 중...';
+  document.getElementById('sent-result-card').style.display = 'none';
+  document.getElementById('sent-loading').style.display = 'flex';
+
+  try {
+    const data = await callApi('sentiment-response', { message });
+    const s    = data.sentiment;
+    const meta = data.metadata;
+
+    const emojiMap   = { positive: '😊', negative: '😢', neutral: '😐' };
+    const labelMap   = { positive: '긍정적', negative: '부정적', neutral: '중립적' };
+    const confPct    = Math.round((s.confidence || 0) * 100);
+
+    document.getElementById('sent-emoji').textContent = emojiMap[s.result] || '😐';
+    const labelEl = document.getElementById('sent-label');
+    labelEl.textContent  = labelMap[s.result] || s.result;
+    labelEl.className    = 'sentiment-label ' + s.result;
+    document.getElementById('sent-reason').textContent = s.reason || '';
+    const bar = document.getElementById('sent-bar');
+    bar.style.width     = confPct + '%';
+    bar.className       = 'confidence-fill ' + s.result;
+    document.getElementById('sent-conf').textContent = `신뢰도 ${confPct}%`;
+
+    const emotionsEl = document.getElementById('sent-emotions');
+    emotionsEl.innerHTML = (s.emotions || []).map(e =>
+      `<span class="emotion-tag">${e}</span>`).join('') || '<span style="color:var(--text-muted)">-</span>';
+
+    document.getElementById('sent-tone-label').textContent = `AI 응답 (${meta.toneApplied})`;
+    document.getElementById('sent-response').textContent   = data.data.message;
+    document.getElementById('sent-model').textContent      = meta.model;
+    document.getElementById('sent-rt').textContent         = meta.responseTime;
+
+    document.getElementById('sent-result-card').style.display = 'flex';
+  } catch (err) {
+    showToast(err.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '감정 분석 실행 →';
+    document.getElementById('sent-loading').style.display = 'none';
+  }
+}
+
+// ── HTML 이스케이프
+function escHtml(str) {
+  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
+}
+</script>
+</body>
+</html>
