@@ -161,11 +161,7 @@ pull_model() {
 }
 
 # 워크플로우에서 사용하는 모든 모델 다운로드
-pull_model "llama3.2"        # 기본 모델 (메인 어시스턴트, 감정 분석)
-pull_model "llama3.2:1b"    # 경량 모델 (라우터 - simple)
-
-# llama3.2:latest는 llama3.2와 동일하므로 별도 풀 불필요
-log_info "llama3.2:latest 태그 확인 중..."
+pull_model "exaone3.5:2.4b"  # 한국어 특화 모델 (모든 워크플로우)
 docker exec n8n_ollama ollama list 2>/dev/null || true
 
 # =============================================================

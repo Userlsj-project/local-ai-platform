@@ -14,18 +14,24 @@
       "name": "웹훅 트리거",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
-      "position": [240, 300],
+      "position": [
+        240,
+        300
+      ],
       "webhookId": "ai-assistant-main"
     },
     {
       "parameters": {
-        "jsCode": "// =============================================================\n// API 키 인증 및 입력 값 검증\n// X-API-Key 헤더를 확인하여 인가된 요청만 처리\n// =============================================================\n\nconst headers = $input.first().json.headers || {};\nconst body    = $input.first().json.body || {};\n\n// 환경 변수에서 API 키 로드\nconst expectedApiKey = $env.API_SECRET_KEY || 'n8n-ollama-api-key-2024';\nconst providedApiKey = headers['x-api-key'] || headers['X-API-Key'] || '';\n\n// 인증 실패 처리\nif (providedApiKey !== expectedApiKey) {\n  throw new Error('AUTH_FAILED: 유효하지 않은 API 키입니다. X-API-Key 헤더를 확인하세요.');\n}\n\n// 필수 입력 값 검증\nconst userMessage = (body.message || '').trim();\nconst sessionId   = (body.session_id || `session_${Date.now()}`).trim();\n\nif (!userMessage) {\n  throw new Error('VALIDATION_ERROR: message 필드는 필수입니다.');\n}\n\nif (userMessage.length > 4000) {\n  throw new Error('VALIDATION_ERROR: 메시지는 4000자를 초과할 수 없습니다.');\n}\n\n// 요청 타임스탬프 기록 (응답 시간 측정용)\nconst requestStartTime = Date.now();\n\nreturn {\n  userMessage,\n  sessionId,\n  requestStartTime,\n  requestId: `req_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`\n};"
+        "jsCode": "// =============================================================\n// API 키 인증 및 입력 값 검증\n// X-API-Key 헤더를 확인하여 인가된 요청만 처리\n// =============================================================\n\nconst headers = $input.first().json.headers || {};\nconst body    = $input.first().json.body || {};\n\n// 환경 변수에서 API 키 로드\nlet expectedApiKey;\ntry { expectedApiKey = $env.API_SECRET_KEY; } catch(e) {}\nexpectedApiKey = expectedApiKey || 'n8n-ollama-api-key-2024';\nconst providedApiKey = headers['x-api-key'] || headers['X-API-Key'] || '';\n\n// 인증 실패 처리\nif (providedApiKey !== expectedApiKey) {\n  throw new Error('AUTH_FAILED: 유효하지 않은 API 키입니다. X-API-Key 헤더를 확인하세요.');\n}\n\n// 필수 입력 값 검증\nconst userMessage = (body.message || '').trim();\nconst sessionId   = (body.session_id || `session_${Date.now()}`).trim();\n\nif (!userMessage) {\n  throw new Error('VALIDATION_ERROR: message 필드는 필수입니다.');\n}\n\nif (userMessage.length > 4000) {\n  throw new Error('VALIDATION_ERROR: 메시지는 4000자를 초과할 수 없습니다.');\n}\n\n// 요청 타임스탬프 기록 (응답 시간 측정용)\nconst requestStartTime = Date.now();\n\nreturn {\n  userMessage,\n  sessionId,\n  requestStartTime,\n  requestId: `req_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`\n};"
       },
       "id": "auth-and-validate",
       "name": "인증 및 입력 검증",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [460, 300]
+      "position": [
+        460,
+        300
+      ]
     },
     {
       "parameters": {
@@ -37,23 +43,29 @@
       "name": "Redis 대화 기록 조회",
       "type": "n8n-nodes-base.redis",
       "typeVersion": 1,
-      "position": [680, 300],
+      "position": [
+        680,
+        300
+      ],
       "credentials": {
         "redis": {
-          "id": "redis-creds",
+          "id": "M5IGCVoYvp6HhSUr",
           "name": "Redis 연결"
         }
       }
     },
     {
       "parameters": {
-        "jsCode": "// =============================================================\n// 대화 기록 파싱 및 Ollama 프롬프트 포맷팅\n// Redis에서 가져온 JSON 기록을 메시지 배열로 변환\n// =============================================================\n\nconst authData    = $('인증 및 입력 검증').first().json;\nconst redisResult = $input.first().json;\n\n// Redis에서 가져온 대화 기록 파싱 (없으면 빈 배열)\nlet conversationHistory = [];\ntry {\n  const raw = redisResult.value || redisResult || null;\n  if (raw && typeof raw === 'string') {\n    conversationHistory = JSON.parse(raw);\n  } else if (Array.isArray(raw)) {\n    conversationHistory = raw;\n  }\n} catch (e) {\n  // 파싱 실패 시 새 대화 시작\n  conversationHistory = [];\n}\n\n// 최대 기록 수 제한 (환경 변수 기준)\nconst maxHistory = parseInt($env.MAX_HISTORY_LENGTH || '20', 10);\nif (conversationHistory.length > maxHistory) {\n  // 최신 기록만 유지 (시스템 메시지 제외)\n  conversationHistory = conversationHistory.slice(-maxHistory);\n}\n\n// 시스템 프롬프트 정의\nconst systemPrompt = `당신은 친절하고 전문적인 AI 어시스턴트입니다.\n다음 지침을 따라 응답하세요:\n1. 사용자의 언어(한국어/영어)에 맞게 응답하세요.\n2. 명확하고 구조적인 답변을 제공하세요.\n3. 이전 대화 맥락을 고려하여 일관성 있는 응답을 유지하세요.\n4. 불확실한 정보는 명시적으로 표현하세요.`;\n\n// Ollama API 형식의 메시지 배열 구성\nconst messages = [\n  { role: 'system', content: systemPrompt },\n  ...conversationHistory,\n  { role: 'user', content: authData.userMessage }\n];\n\nreturn {\n  ...authData,\n  messages,\n  conversationHistory,\n  historyLength: conversationHistory.length\n};"
+        "jsCode": "// =============================================================\n// 대화 기록 파싱 및 Ollama 프롬프트 포맷팅\n// Redis에서 가져온 JSON 기록을 메시지 배열로 변환\n// =============================================================\n\nconst authData    = $('인증 및 입력 검증').first().json;\nconst redisResult = $input.first().json;\n\n// Redis에서 가져온 대화 기록 파싱 (없으면 빈 배열)\nlet conversationHistory = [];\ntry {\n  const raw = redisResult.value || redisResult || null;\n  if (raw && typeof raw === 'string') {\n    conversationHistory = JSON.parse(raw);\n  } else if (Array.isArray(raw)) {\n    conversationHistory = raw;\n  }\n} catch (e) {\n  // 파싱 실패 시 새 대화 시작\n  conversationHistory = [];\n}\n\n// 최대 기록 수 제한 (환경 변수 기준)\nlet _maxHistLen; try { _maxHistLen = $env.MAX_HISTORY_LENGTH; } catch(e) {}\nconst maxHistory = parseInt(_maxHistLen || '20', 10);\nif (conversationHistory.length > maxHistory) {\n  // 최신 기록만 유지 (시스템 메시지 제외)\n  conversationHistory = conversationHistory.slice(-maxHistory);\n}\n\n// 시스템 프롬프트 정의\nconst systemPrompt = `당신은 친절하고 전문적인 AI 어시스턴트입니다.\n다음 지침을 따라 응답하세요:\n1. 반드시 한국어로만 응답하세요. 영어를 사용하지 마세요.\n2. 명확하고 구조적인 답변을 제공하세요.\n3. 이전 대화 맥락을 고려하여 일관성 있는 응답을 유지하세요.\n4. 불확실한 정보는 명시적으로 표현하세요.`;\n\n// Ollama API 형식의 메시지 배열 구성\nconst messages = [\n  { role: 'system', content: systemPrompt },\n  ...conversationHistory,\n  { role: 'user', content: authData.userMessage }\n];\n\nconst ollamaBody = {\n  model: 'exaone3.5:2.4b',\n  messages,\n  stream: false,\n  options: { temperature: 0.7, top_p: 0.9, num_predict: 1024 }\n};\n\nreturn {\n  ...authData,\n  messages,\n  conversationHistory,\n  historyLength: conversationHistory.length,\n  ollamaBody\n};"
       },
       "id": "format-prompt",
       "name": "프롬프트 포맷팅",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [900, 300]
+      "position": [
+        900,
+        300
+      ]
     },
     {
       "parameters": {
@@ -61,16 +73,8 @@
         "url": "=http://ollama:11434/api/chat",
         "sendBody": true,
         "contentType": "json",
-        "body": {
-          "model": "llama3.2",
-          "messages": "={{ $json.messages }}",
-          "stream": false,
-          "options": {
-            "temperature": 0.7,
-            "top_p": 0.9,
-            "num_predict": 1024
-          }
-        },
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.ollamaBody) }}",
         "options": {
           "timeout": 120000,
           "response": {
@@ -84,17 +88,23 @@
       "name": "Ollama LLM 요청",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1120, 300]
+      "position": [
+        1120,
+        300
+      ]
     },
     {
       "parameters": {
-        "jsCode": "// =============================================================\n// Ollama 응답 파싱 및 대화 기록 업데이트 준비\n// 새 메시지를 기록에 추가하고 Redis 저장 형식으로 변환\n// =============================================================\n\nconst ollamaResponse = $input.first().json;\nconst promptData     = $('프롬프트 포맷팅').first().json;\n\n// Ollama 응답에서 메시지 내용 추출\nconst aiMessage = ollamaResponse?.message?.content || ollamaResponse?.response || '응답을 생성하는 데 실패했습니다.';\nconst modelUsed = ollamaResponse?.model || 'llama3.2';\n\n// 응답 시간 계산 (밀리초)\nconst responseTime = Date.now() - promptData.requestStartTime;\n\n// 대화 기록에 새 교환 추가\nconst updatedHistory = [\n  ...promptData.conversationHistory,\n  { role: 'user',      content: promptData.userMessage },\n  { role: 'assistant', content: aiMessage }\n];\n\n// 최대 기록 수 적용\nconst maxHistory = parseInt($env.MAX_HISTORY_LENGTH || '20', 10);\nconst trimmedHistory = updatedHistory.length > maxHistory\n  ? updatedHistory.slice(-maxHistory)\n  : updatedHistory;\n\nreturn {\n  sessionId:       promptData.sessionId,\n  requestId:       promptData.requestId,\n  userMessage:     promptData.userMessage,\n  aiMessage,\n  modelUsed,\n  responseTime,\n  updatedHistory:  JSON.stringify(trimmedHistory),\n  requestStartTime: promptData.requestStartTime\n};"
+        "jsCode": "// =============================================================\n// Ollama 응답 파싱 및 대화 기록 업데이트 준비\n// 새 메시지를 기록에 추가하고 Redis 저장 형식으로 변환\n// =============================================================\n\nconst ollamaResponse = $input.first().json;\nconst promptData     = $('프롬프트 포맷팅').first().json;\n\n// Ollama 응답에서 메시지 내용 추출\nconst aiMessage = ollamaResponse?.message?.content || ollamaResponse?.response || '응답을 생성하는 데 실패했습니다.';\nconst modelUsed = ollamaResponse?.model || 'exaone3.5:2.4b';\n\n// 응답 시간 계산 (밀리초)\nconst responseTime = Date.now() - promptData.requestStartTime;\n\n// 대화 기록에 새 교환 추가\nconst updatedHistory = [\n  ...promptData.conversationHistory,\n  { role: 'user',      content: promptData.userMessage },\n  { role: 'assistant', content: aiMessage }\n];\n\n// 최대 기록 수 적용\nlet _maxH; try { _maxH = $env.MAX_HISTORY_LENGTH; } catch(e) {}\nconst maxHistory = parseInt(_maxH || '20', 10);\nconst trimmedHistory = updatedHistory.length > maxHistory\n  ? updatedHistory.slice(-maxHistory)\n  : updatedHistory;\n\nreturn {\n  sessionId:       promptData.sessionId,\n  requestId:       promptData.requestId,\n  userMessage:     promptData.userMessage,\n  aiMessage,\n  modelUsed,\n  responseTime,\n  updatedHistory:  JSON.stringify(trimmedHistory),\n  requestStartTime: promptData.requestStartTime\n};"
       },
       "id": "parse-response",
       "name": "응답 파싱",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1340, 300]
+      "position": [
+        1340,
+        300
+      ]
     },
     {
       "parameters": {
@@ -103,16 +113,19 @@
         "value": "={{ $json.updatedHistory }}",
         "keyType": "automatic",
         "expire": true,
-        "ttl": "={{ parseInt($env.SESSION_TTL || '86400', 10) }}"
+        "ttl": 86400
       },
       "id": "redis-save-history",
       "name": "Redis 대화 기록 저장",
       "type": "n8n-nodes-base.redis",
       "typeVersion": 1,
-      "position": [1560, 200],
+      "position": [
+        1560,
+        200
+      ],
       "credentials": {
         "redis": {
-          "id": "redis-creds",
+          "id": "M5IGCVoYvp6HhSUr",
           "name": "Redis 연결"
         }
       }
@@ -127,10 +140,13 @@
       "name": "PostgreSQL 대화 로그 저장",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [1560, 400],
+      "position": [
+        1560,
+        400
+      ],
       "credentials": {
         "postgres": {
-          "id": "postgres-creds",
+          "id": "2ohLPRu7JQGfVNLK",
           "name": "PostgreSQL 연결"
         }
       }
@@ -143,7 +159,10 @@
       "name": "최종 응답 포맷팅",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1780, 300]
+      "position": [
+        1780,
+        300
+      ]
     },
     {
       "parameters": {
@@ -153,8 +172,14 @@
           "responseCode": 200,
           "responseHeaders": {
             "entries": [
-              { "name": "Content-Type", "value": "application/json" },
-              { "name": "X-Request-Id", "value": "={{ JSON.parse($json.response).requestId }}" }
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "name": "X-Request-Id",
+                "value": "={{ JSON.parse($json.response).requestId }}"
+              }
             ]
           }
         }
@@ -163,7 +188,10 @@
       "name": "성공 응답 반환",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
-      "position": [2000, 300]
+      "position": [
+        2000,
+        300
+      ]
     },
     {
       "parameters": {
@@ -173,7 +201,10 @@
       "name": "에러 처리",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1000, 520]
+      "position": [
+        1000,
+        520
+      ]
     },
     {
       "parameters": {
@@ -183,7 +214,10 @@
           "responseCode": "={{ $json.statusCode }}",
           "responseHeaders": {
             "entries": [
-              { "name": "Content-Type", "value": "application/json" }
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
             ]
           }
         }
@@ -192,65 +226,129 @@
       "name": "에러 응답 반환",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
-      "position": [1220, 520]
+      "position": [
+        1220,
+        520
+      ]
     }
   ],
   "connections": {
     "웹훅 트리거": {
       "main": [
-        [{ "node": "인증 및 입력 검증", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "인증 및 입력 검증",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "인증 및 입력 검증": {
       "main": [
-        [{ "node": "Redis 대화 기록 조회", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Redis 대화 기록 조회",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Redis 대화 기록 조회": {
       "main": [
-        [{ "node": "프롬프트 포맷팅", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "프롬프트 포맷팅",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "프롬프트 포맷팅": {
       "main": [
-        [{ "node": "Ollama LLM 요청", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Ollama LLM 요청",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Ollama LLM 요청": {
       "main": [
-        [{ "node": "응답 파싱", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "응답 파싱",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "응답 파싱": {
       "main": [
         [
-          { "node": "Redis 대화 기록 저장", "type": "main", "index": 0 },
-          { "node": "PostgreSQL 대화 로그 저장", "type": "main", "index": 0 }
+          {
+            "node": "Redis 대화 기록 저장",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "PostgreSQL 대화 로그 저장",
+            "type": "main",
+            "index": 0
+          }
         ]
       ]
     },
     "Redis 대화 기록 저장": {
       "main": [
-        [{ "node": "최종 응답 포맷팅", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "최종 응답 포맷팅",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "PostgreSQL 대화 로그 저장": {
       "main": [
-        [{ "node": "최종 응답 포맷팅", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "최종 응답 포맷팅",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "최종 응답 포맷팅": {
       "main": [
-        [{ "node": "성공 응답 반환", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "성공 응답 반환",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "에러 처리": {
       "main": [
-        [{ "node": "에러 응답 반환", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "에러 응답 반환",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     }
   },
-  "active": true,
   "settings": {
     "executionOrder": "v1",
     "saveManualExecutions": true,
@@ -258,13 +356,13 @@
     "errorWorkflow": "",
     "saveDataErrorExecution": "all",
     "saveDataSuccessExecution": "all",
-    "executionTimeout": 180
+    "executionTimeout": 180,
+    "availableInMCP": false
   },
-  "versionId": "v1.0.0",
+  "staticData": null,
   "meta": {
-    "templateCredsSetupCompleted": false,
     "instanceId": "n8n-ollama-platform"
   },
-  "id": "workflow-01-main-assistant",
-  "tags": ["AI", "Ollama", "Redis", "PostgreSQL", "Assistant"]
+  "id": "19Vp9ruPuvKZ6d1c",
+  "tags": []
 }
